@@ -69,13 +69,11 @@ export function displayShortcuts(options: IOptions) {
           <span className={SHORTCUT_KEY_CLASS} key={`ch-${chIndex}`}>
             <kbd>{ch}</kbd>
           </span>,
-          // eslint-disable-next-line jupyter/no-untranslated-string
           <React.Fragment key={`fragment-${chIndex}`}> + </React.Fragment>
         );
       });
       topContainer.push(
         <span key={`key-${index}`}>{container.slice(0, -1)}</span>,
-        // eslint-disable-next-line jupyter/no-untranslated-string
         <React.Fragment key={`fragment-${index}`}> + </React.Fragment>
       );
     });
