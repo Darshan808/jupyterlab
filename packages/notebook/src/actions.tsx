@@ -2322,6 +2322,7 @@ export namespace NotebookActions {
           'Selecting "Trust" will re-render this notebook in a trusted state.'
         )}
         <br />
+        {/* eslint-disable-next-line jupyter/no-untranslated-string */}
         {trans.__('For more information, see')}{' '}
         <a
           href="https://jupyter-server.readthedocs.io/en/stable/operators/security.html"
@@ -2329,6 +2330,7 @@ export namespace NotebookActions {
           rel="noopener noreferrer"
         >
           {trans.__('the Jupyter security documentation')}
+          {/* eslint-disable-next-line jupyter/no-untranslated-string */}
         </a>
         .
       </p>

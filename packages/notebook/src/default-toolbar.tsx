@@ -390,6 +390,7 @@ export class CellTypeSwitcher extends ReactWidget {
         aria-label={this._trans.__('Cell type')}
         title={this._trans.__('Select the cell type')}
       >
+        {/* eslint-disable-next-line jupyter/no-untranslated-string */}
         <option value="-">-</option>
         <option value="code">{this._trans.__('Code')}</option>
         <option value="markdown">{this._trans.__('Markdown')}</option>

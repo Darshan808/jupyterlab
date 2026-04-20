@@ -345,6 +345,7 @@ export class ShortcutItem extends React.Component<
             ))}
         </div>
         {index + 1 < binding.keys.length ? (
+          // eslint-disable-next-line jupyter/no-untranslated-string
           <div className="jp-Shortcuts-Comma">,</div>
         ) : null}
       </div>

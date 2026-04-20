@@ -453,7 +453,12 @@ namespace Private {
               const kernelIdPrefix = this.kernel.id.split('-')[0];
               return (
                 <>
-                  {name}{' '}
+                  {name}
+                  {
+                    // eslint-disable-next-line jupyter/no-untranslated-string
+                    ' '
+                  }
+                  {/* eslint-disable-next-line jupyter/no-untranslated-string */}
                   <span className={KERNEL_LABEL_ID}>({kernelIdPrefix})</span>
                 </>
               );
@@ -479,7 +484,12 @@ namespace Private {
       const kernelIdPrefix = kernel.id.split('-')[0];
       return (
         <>
-          {this._summary}{' '}
+          {this._summary}
+          {
+            /* eslint-disable-next-line jupyter/no-untranslated-string */
+            ' '
+          }
+          {/* eslint-disable-next-line jupyter/no-untranslated-string */}
           <span className={KERNEL_LABEL_ID}>({kernelIdPrefix})</span>
         </>
       );
