@@ -16,15 +16,15 @@ import {
 import {
   Dialog,
   ICommandPalette,
+  IMovableSectionRegistry,
   ISanitizer,
-  ISectionMoverRegistry,
   ISessionContextDialogs,
   ISplashScreen,
   IWindowResolver,
   MainAreaWidget,
+  MovableSectionRegistry,
   Printing,
   Sanitizer,
-  SectionMoverRegistry,
   SessionContextDialogs,
   WindowResolver
 } from '@jupyterlab/apputils';
@@ -149,7 +149,7 @@ const resolver: JupyterFrontEndPlugin<IWindowResolver> = {
     try {
       await solver.resolve(candidate);
       return solver;
-    } catch (error) {
+    } catch {
       // Window resolution has failed so the URL must change. Return a promise
       // that never resolves to prevent the application from loading plugins
       // that rely on `IWindowResolver`.
@@ -246,7 +246,7 @@ Would you like to clear the workspace or keep waiting?`),
             // Because recovery can be stopped, handle invocation rejection.
             void recovery.invoke().catch(_ => undefined);
           });
-        } catch (error) {
+        } catch {
           /* no-op */
         }
       },
@@ -901,14 +901,14 @@ export const kernelSettings: JupyterFrontEndPlugin<void> = {
 };
 
 /**
- * Plugin providing the section mover registry.
+ * Plugin providing the movable section registry.
  */
-const sectionMoverRegistry: JupyterFrontEndPlugin<ISectionMoverRegistry> = {
-  id: '@jupyterlab/apputils-extension:section-mover-registry',
+const movableSectionRegistry: JupyterFrontEndPlugin<IMovableSectionRegistry> = {
+  id: '@jupyterlab/apputils-extension:movable-section-registry',
   description:
-    'Provides the section mover registry for panels that exchange moveable sections.',
-  provides: ISectionMoverRegistry,
-  activate: (): ISectionMoverRegistry => new SectionMoverRegistry()
+    'Provides the movable section registry for panels that exchange moveable sections.',
+  provides: IMovableSectionRegistry,
+  activate: (): IMovableSectionRegistry => new MovableSectionRegistry()
 };
 
 /**
@@ -936,7 +936,7 @@ const plugins: JupyterFrontEndPlugin<any>[] = [
   themesPlugin,
   themesPaletteMenuPlugin,
   toggleHeader,
-  sectionMoverRegistry,
+  movableSectionRegistry,
   toolbarRegistry,
   utilityCommands,
   workspacesPlugin

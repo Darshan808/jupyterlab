@@ -774,21 +774,6 @@ export interface IRunningSessionSidebar extends ISidebarWithSections {
    * The toolbar of the running sidebar.
    */
   readonly toolbar: Toolbar;
-
-  /**
-   * Remove a section by its ID and return the widget.
-   *
-   * @param sectionId - The identifier (manager name) of the section to remove.
-   * @returns The removed section widget, or null if not found.
-   */
-  removeSection(sectionId: string): Widget | null;
-
-  /**
-   * Re-insert a previously removed section back into the sidebar.
-   *
-   * @param widget - The section widget to re-insert.
-   */
-  reinsertSection(widget: Widget): void;
 }
 
 /**
@@ -838,6 +823,8 @@ export class RunningSessions
     this.managers.added.disconnect(this.addSection, this);
     super.dispose();
   }
+
+  // ISidebarWithSections implementation
 
   /**
    * Remove a section by manager name and return the widget.

@@ -13,7 +13,7 @@ import { ILabShell, ILayoutRestorer } from '@jupyterlab/application';
 import {
   Dialog,
   ICommandPalette,
-  ISectionMoverRegistry
+  IMovableSectionRegistry
 } from '@jupyterlab/apputils';
 import type { IRunningSessions } from '@jupyterlab/running';
 import {
@@ -244,7 +244,7 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
   description:
     'Allows moving running session sections to the file browser sidebar.',
   requires: [IRunningSessionManagers, IRunningSessionSidebar, ITranslator],
-  optional: [IDefaultFileBrowser, IStateDB, ISectionMoverRegistry],
+  optional: [IDefaultFileBrowser, IStateDB, IMovableSectionRegistry],
   autoStart: true,
   activate: (
     app: JupyterFrontEnd,
@@ -253,7 +253,7 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
     translator: ITranslator,
     fileBrowser: IDefaultFileBrowser | null,
     stateDB: IStateDB | null,
-    sectionMoverRegistry: ISectionMoverRegistry | null
+    movableSectionRegistry: IMovableSectionRegistry | null
   ): void => {
     if (!fileBrowser) {
       return;
@@ -262,13 +262,13 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
     const trans = translator.load('jupyterlab');
     const running = sidebar as RunningSessions;
 
-    if (sectionMoverRegistry) {
-      sectionMoverRegistry.registerSource(
+    if (movableSectionRegistry) {
+      movableSectionRegistry.registerSource(
         '@jupyterlab/running-extension:running-sessions',
         trans.__('Running Sessions'),
         sidebar
       );
-      sectionMoverRegistry.registerTarget(
+      movableSectionRegistry.registerTarget(
         '@jupyterlab/filebrowser-extension:default-file-browser',
         trans.__('File Browser'),
         fileBrowser

@@ -2,7 +2,7 @@
 // Distributed under the terms of the Modified BSD License.
 
 import type {
-  ISectionMoverRegistry,
+  IMovableSectionRegistry,
   ISectionPanelTarget,
   ISidebarWithSections
 } from './tokens';
@@ -11,7 +11,7 @@ import type {
  * Source and target panels register themselves here so that generic
  * section-moving commands can discover them.
  */
-export class SectionMoverRegistry implements ISectionMoverRegistry {
+export class MovableSectionRegistry implements IMovableSectionRegistry {
   private readonly _sources = new Map<
     string,
     { label: string; sidebar: ISidebarWithSections }

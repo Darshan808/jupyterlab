@@ -463,7 +463,7 @@ export interface ISectionPanelTarget {
 /**
  * Registry where source and target panels register themselves
  */
-export interface ISectionMoverRegistry {
+export interface IMovableSectionRegistry {
   /**
    * Register a sidebar as a source of moveable sections.
    *
@@ -504,9 +504,9 @@ export interface ISectionMoverRegistry {
 }
 
 /**
- * The section mover registry token.
+ * The movable section registry token.
  */
-export const ISectionMoverRegistry = new Token<ISectionMoverRegistry>(
-  '@jupyterlab/apputils:ISectionMoverRegistry',
+export const IMovableSectionRegistry = new Token<IMovableSectionRegistry>(
+  '@jupyterlab/apputils:IMovableSectionRegistry',
   'A registry for panels that can exchange moveable sections.'
 );
