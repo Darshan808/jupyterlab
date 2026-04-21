@@ -5,6 +5,9 @@ from jupyter_builder.federated_extensions import (
     develop_labextension as _develop_labextension,
 )
 from jupyter_builder.federated_extensions import (
+    develop_labextension_py as _develop_labextension_py,
+)
+from jupyter_builder.federated_extensions import (
     watch_labextension as _watch_labextension,
 )
 
@@ -26,4 +29,14 @@ def develop_labextension(*args, **kwargs):
     return _develop_labextension(*args, **kwargs)
 
 
-__all__ = ["build_labextension", "develop_labextension", "watch_labextension"]
+@deprecated("jupyter_builder.federated_extensions.develop_labextension_py")
+def develop_labextension_py(*args, **kwargs):
+    return _develop_labextension_py(*args, **kwargs)
+
+
+__all__ = [
+    "build_labextension",
+    "develop_labextension",
+    "develop_labextension_py",
+    "watch_labextension",
+]
