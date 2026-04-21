@@ -453,7 +453,7 @@ namespace Private {
               const kernelIdPrefix = this.kernel.id.split('-')[0];
               return (
                 <>
-                  {name} {}
+                  {name}{' '}
                   <span className={KERNEL_LABEL_ID}>({kernelIdPrefix})</span>
                 </>
               );
@@ -479,7 +479,7 @@ namespace Private {
       const kernelIdPrefix = kernel.id.split('-')[0];
       return (
         <>
-          {this._summary} {}
+          {this._summary}{' '}
           <span className={KERNEL_LABEL_ID}>({kernelIdPrefix})</span>
         </>
       );
