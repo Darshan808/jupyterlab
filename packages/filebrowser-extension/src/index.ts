@@ -19,6 +19,7 @@ import {
   Clipboard,
   createToolbarFactory,
   ICommandPalette,
+  IMovableSectionRegistry,
   InputDialog,
   IToolbarWidgetRegistry,
   Notification,
@@ -371,7 +372,8 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
     JupyterFrontEnd.ITreeResolver,
     ILabShell,
     ITranslator,
-    IDefaultFileBrowserRenderer
+    IDefaultFileBrowserRenderer,
+    IMovableSectionRegistry
   ],
   activate: async (
     app: JupyterFrontEnd,
@@ -380,7 +382,8 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
     tree: JupyterFrontEnd.ITreeResolver | null,
     labShell: ILabShell | null,
     translator: ITranslator | null,
-    renderer: IDefaultFileBrowserRenderer | null
+    renderer: IDefaultFileBrowserRenderer | null,
+    registry: IMovableSectionRegistry | null
   ): Promise<IDefaultFileBrowser> => {
     const { commands } = app;
     const trans = (translator ?? nullTranslator).load('jupyterlab');
@@ -416,6 +419,14 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
     app.commands.keyBindingChanged.connect(() => {
       updateBrowserTitle();
     });
+
+    if (registry) {
+      registry.registerTarget(
+        '@jupyterlab/filebrowser-extension:default-file-browser',
+        trans.__('File Browser'),
+        defaultBrowser
+      );
+    }
 
     void Private.restoreBrowser(
       defaultBrowser,

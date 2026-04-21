@@ -681,6 +681,10 @@ export class FileBrowser extends SidePanel implements ISectionPanelTarget {
     return this.bottomWidgets;
   }
 
+  get accordionPanel(): AccordionPanel | null {
+    return this._bottomPanel;
+  }
+
   /**
    * The split panel used for the bottom area, if active.
    */

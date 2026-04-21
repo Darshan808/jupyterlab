@@ -7,7 +7,7 @@
 
 import { Button, TreeItem, TreeView } from '@jupyter/react-components';
 import { Dialog, showDialog } from '@jupyterlab/apputils';
-import type { ISidebarWithSections } from '@jupyterlab/apputils';
+import type { ISectionEntry, ISidebarWithSections } from '@jupyterlab/apputils';
 import type { IStateDB } from '@jupyterlab/statedb';
 import type { ITranslator, TranslationBundle } from '@jupyterlab/translation';
 import { nullTranslator } from '@jupyterlab/translation';
@@ -35,6 +35,7 @@ import { ElementExt } from '@lumino/domutils';
 import type { Message } from '@lumino/messaging';
 import type { ISignal } from '@lumino/signaling';
 import { Signal } from '@lumino/signaling';
+import type { AccordionPanel } from '@lumino/widgets';
 import { Panel, Widget } from '@lumino/widgets';
 import type { ReactNode } from 'react';
 import React, { isValidElement, useCallback, useRef } from 'react';
@@ -875,6 +876,15 @@ export class RunningSessions
         await this._updateState(sectionId, viewState.mode);
       }
     );
+
+    const panel = this.content as AccordionPanel;
+    const idx = Array.from(panel.widgets).indexOf(section);
+    if (idx >= 0) {
+      this._sectionAdded.emit({
+        id: manager.name,
+        titleNode: panel.titles[idx]
+      });
+    }
   }
 
   /**
@@ -908,10 +918,35 @@ export class RunningSessions
     );
   }
 
+  /**
+   * Signal emitted when a section is added to this sidebar.
+   * The generic move plugin uses this to attach context-menu markers and to
+   * fulfil pending state restorations.
+   */
+  get sectionAdded(): ISignal<this, ISectionEntry> {
+    return this._sectionAdded;
+  }
+
+  /**
+   * Return the currently-available sections with their accordion title nodes.
+   */
+  getSections(): ReadonlyArray<ISectionEntry> {
+    const panel = this.content as AccordionPanel;
+    const result: ISectionEntry[] = [];
+    for (const [id, widget] of this._sectionMap) {
+      const idx = Array.from(panel.widgets).indexOf(widget);
+      if (idx >= 0 && panel.titles[idx]) {
+        result.push({ id, titleNode: panel.titles[idx] });
+      }
+    }
+    return result;
+  }
+
   protected managers: IRunningSessionManagers;
   protected translator: ITranslator;
   private _stateDB: IStateDB | null;
   private _sectionMap = new Map<string, Widget>();
+  private readonly _sectionAdded = new Signal<this, ISectionEntry>(this);
 }
 
 /**

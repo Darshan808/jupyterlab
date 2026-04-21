@@ -15,7 +15,10 @@ import {
   ICommandPalette,
   IMovableSectionRegistry
 } from '@jupyterlab/apputils';
-import type { IRunningSessions } from '@jupyterlab/running';
+import type {
+  ISectionPanelTarget,
+  ISidebarWithSections
+} from '@jupyterlab/apputils';
 import {
   IRunningSessionManagers,
   IRunningSessionSidebar,
@@ -23,7 +26,6 @@ import {
   RunningSessions,
   SearchableSessions
 } from '@jupyterlab/running';
-import { IDefaultFileBrowser } from '@jupyterlab/filebrowser';
 import { IRecentsManager } from '@jupyterlab/docmanager';
 import { IStateDB } from '@jupyterlab/statedb';
 import { ITranslator } from '@jupyterlab/translation';
@@ -31,7 +33,9 @@ import {
   CommandToolbarButton,
   launcherIcon,
   PanelWithToolbar,
-  runningIcon
+  runningIcon,
+  ToolbarButton,
+  undoIcon
 } from '@jupyterlab/ui-components';
 import type {
   ReadonlyPartialJSONObject,
@@ -53,9 +57,8 @@ export namespace CommandIDs {
   export const kernelShutDownUnused = 'running:kernel-shut-down-unused';
   export const showPanel = 'running:show-panel';
   export const showModal = 'running:show-modal';
-  export const moveSectionToFileBrowser = 'running:move-section-to-filebrowser';
-  export const moveSectionBackFromFileBrowser =
-    'running:move-section-back-from-filebrowser';
+  export const moveSectionTo = 'running:move-section-to';
+  export const moveSectionBack = 'running:move-section-back';
 }
 
 /**
@@ -96,14 +99,15 @@ const sidebarPlugin: JupyterFrontEndPlugin<IRunningSessionSidebar> = {
   description: 'Provides the running session sidebar.',
   provides: IRunningSessionSidebar,
   requires: [IRunningSessionManagers, ITranslator],
-  optional: [ILayoutRestorer, IStateDB],
+  optional: [ILayoutRestorer, IStateDB, IMovableSectionRegistry],
   autoStart: true,
   activate: (
     app: JupyterFrontEnd,
     manager: IRunningSessionManagers,
     translator: ITranslator,
     restorer: ILayoutRestorer | null,
-    state: IStateDB | null
+    state: IStateDB | null,
+    registry: IMovableSectionRegistry | null
   ): IRunningSessionSidebar => {
     const trans = translator.load('jupyterlab');
     const running = new RunningSessions(manager, translator, state);
@@ -116,14 +120,9 @@ const sidebarPlugin: JupyterFrontEndPlugin<IRunningSessionSidebar> = {
       trans.__('Running Sessions section')
     );
 
-    // Let the application restorer track the running panel for restoration of
-    // application state (e.g. setting the running panel as the current side bar
-    // widget).
     if (restorer) {
       restorer.add(running, 'running-sessions');
     }
-    // Rank has been chosen somewhat arbitrarily to give priority to the running
-    // sessions widget in the sidebar.
     app.shell.add(running, 'left', { rank: 200, type: 'Sessions and Tabs' });
 
     app.commands.addCommand(CommandIDs.showPanel, {
@@ -138,6 +137,14 @@ const sidebarPlugin: JupyterFrontEndPlugin<IRunningSessionSidebar> = {
         app.shell.activateById(running.id);
       }
     });
+
+    if (registry) {
+      registry.registerSource(
+        '@jupyterlab/running-extension:running-sessions',
+        trans.__('Running Sessions'),
+        running
+      );
+    }
 
     return running;
   }
@@ -168,7 +175,7 @@ const recentsPlugin: JupyterFrontEndPlugin<void> = {
 };
 
 /**
- * An optional plugin allowing to among running items.
+ * An optional plugin allowing to search among running items.
  */
 const searchPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/running-extension:search-tabs',
@@ -226,71 +233,118 @@ const searchPlugin: JupyterFrontEndPlugin<void> = {
 /**
  * State DB key for persisting moved sections.
  */
-const MOVE_STATE_KEY = 'running-sessions:moved-to-filebrowser';
+const MOVE_STATE_KEY = 'section-mover:layout';
 
 /**
- * Shape of the persisted state for moved sections.
+ * Shape of the persisted state.
+ * Keyed by target panel ID; each entry lists which sections live there and
+ * the split-panel size ratios so they can be restored on reload.
  */
-interface IMovedSectionsState {
-  movedManagerNames: string[];
-  splitSizes?: number[];
+interface IMoveSectionsState {
+  [targetId: string]: {
+    sections: Array<{ sourceId: string; sectionId: string }>;
+    panelSizes?: number[];
+  };
 }
 
 /**
- * Plugin to allow moving running session sections to the file browser sidebar.
+ * Generic plugin that moves sections between any registered source sidebar
+ * and target panel. Sources and targets announce themselves via
+ * IMovableSectionRegistry; this plugin discovers them through signals so no
+ * code changes are needed when new participants register.
  */
 const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/running-extension:move-sections',
   description:
-    'Allows moving running session sections to the file browser sidebar.',
-  requires: [IRunningSessionManagers, IRunningSessionSidebar, ITranslator],
-  optional: [IDefaultFileBrowser, IStateDB, IMovableSectionRegistry],
+    'Enables moving sections between any registered source and target sidebars.',
+  requires: [ITranslator],
+  optional: [IMovableSectionRegistry, IStateDB],
   autoStart: true,
   activate: (
     app: JupyterFrontEnd,
-    managers: IRunningSessionManagers,
-    sidebar: IRunningSessionSidebar,
     translator: ITranslator,
-    fileBrowser: IDefaultFileBrowser | null,
-    stateDB: IStateDB | null,
-    movableSectionRegistry: IMovableSectionRegistry | null
+    registry: IMovableSectionRegistry | null,
+    stateDB: IStateDB | null
   ): void => {
-    if (!fileBrowser) {
+    if (!registry) {
       return;
     }
 
     const trans = translator.load('jupyterlab');
-    const running = sidebar as RunningSessions;
 
-    if (movableSectionRegistry) {
-      movableSectionRegistry.registerSource(
-        '@jupyterlab/running-extension:running-sessions',
-        trans.__('Running Sessions'),
-        sidebar
-      );
-      movableSectionRegistry.registerTarget(
-        '@jupyterlab/filebrowser-extension:default-file-browser',
-        trans.__('File Browser'),
-        fileBrowser
-      );
-    }
+    // section title element (in source sidebar) → section identity
+    const titleToSection = new WeakMap<
+      HTMLElement,
+      { sourceId: string; sectionId: string }
+    >();
 
-    let lastClickedManagerName: string | null = null;
-    let lastClickedBottomWidget: PanelWithToolbar | null = null;
-    // For state persistence
-    const movedSections = new Set<string>();
+    // hosted widget → provenance info
+    const widgetToInfo = new Map<
+      Widget,
+      {
+        sourceId: string;
+        sectionId: string;
+        sourceLabel: string;
+        targetId: string;
+      }
+    >();
 
-    const saveState = async () => {
+    // hosted accordion title → widget (for context-menu lookup)
+    const hostedTitleToWidget = new WeakMap<HTMLElement, Widget>();
+
+    // per-widget move-back toolbar button, so we can dispose on move-back
+    const widgetToMoveBackButton = new WeakMap<Widget, ToolbarButton>();
+
+    // targets that already have drag-reorder set up
+    const dragSetupDone = new Set<string>();
+
+    // split panels we've connected handleMoved to (avoid duplicate connections)
+    const connectedSplitPanels = new WeakSet<object>();
+
+    // pending restorations: sourceId → Map<sectionId, targetId>
+    const pendingSections = new Map<string, Map<string, string>>();
+    // split sizes to apply once pending sections are resolved
+    const pendingTargetSizes = new Map<string, number[]>();
+
+    // Capture last right-clicked element before the context menu opens
+    document.addEventListener(
+      'contextmenu',
+      (ev: MouseEvent) => {
+        lastContextEl = ev.target as HTMLElement;
+      },
+      true
+    );
+    let lastContextEl: HTMLElement | null = null;
+
+    // ------------------------------------------------------------------ //
+    // Save / restore state                                                 //
+    // ------------------------------------------------------------------ //
+
+    const saveState = async (): Promise<void> => {
       if (!stateDB) {
         return;
       }
-      const state: IMovedSectionsState = {
-        movedManagerNames: Array.from(fileBrowser.bottomWidgets).map(
-          w => w.title.label
-        )
-      };
-      if (fileBrowser.splitPanel) {
-        state.splitSizes = fileBrowser.splitPanel.relativeSizes();
+      const state: IMoveSectionsState = {};
+      for (const [targetId, { panel }] of registry.getTargets()) {
+        // Use panel.sections order to preserve accordion ordering
+        const entries = panel.sections
+          .map(w => widgetToInfo.get(w))
+          .filter(
+            (info): info is NonNullable<typeof info> =>
+              !!info && info.targetId === targetId
+          );
+        if (entries.length === 0) {
+          continue;
+        }
+        state[targetId] = {
+          sections: entries.map(info => ({
+            sourceId: info.sourceId,
+            sectionId: info.sectionId
+          }))
+        };
+        if (panel.splitPanel) {
+          state[targetId].panelSizes = panel.splitPanel.relativeSizes();
+        }
       }
       await stateDB.save(
         MOVE_STATE_KEY,
@@ -298,16 +352,16 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       );
     };
 
-    const addDragHandle = (widget: Widget): void => {
-      const panel = fileBrowser.bottomPanel;
-      if (!panel) {
-        return;
-      }
-      const idx = Array.from(fileBrowser.bottomWidgets).indexOf(widget);
+    // ------------------------------------------------------------------ //
+    // Drag-to-reorder                                                      //
+    // ------------------------------------------------------------------ //
+
+    const addDragHandle = (widget: Widget, accordion: AccordionPanel): void => {
+      const idx = Array.from(accordion.widgets).indexOf(widget);
       if (idx < 0) {
         return;
       }
-      const titleEl = panel.titles[idx];
+      const titleEl = accordion.titles[idx];
       if (!titleEl.querySelector('.jp-FileBrowser-dragHandle')) {
         const handle = document.createElement('span');
         handle.className = 'jp-FileBrowser-dragHandle';
@@ -315,10 +369,14 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       }
     };
 
-    let dragSetupDone = false;
-
-    const setupBottomPanelDrag = (): void => {
-      const panel = fileBrowser.bottomPanel!;
+    const setupAccordionDrag = (
+      accordion: AccordionPanel,
+      targetId: string
+    ): void => {
+      if (dragSetupDone.has(targetId)) {
+        return;
+      }
+      dragSetupDone.add(targetId);
 
       let draggedWidget: Widget | null = null;
       let startY = 0;
@@ -327,10 +385,10 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       const indicator = document.createElement('div');
       indicator.className = 'jp-FileBrowser-dropIndicator';
       indicator.style.display = 'none';
-      panel.node.appendChild(indicator);
+      accordion.node.appendChild(indicator);
 
       const getTargetSlot = (clientY: number): number => {
-        const layout = panel.layout as AccordionLayout;
+        const layout = accordion.layout as AccordionLayout;
         const titles = Array.from(layout.titles);
         for (let i = 0; i < titles.length; i++) {
           const rect = titles[i].getBoundingClientRect();
@@ -342,9 +400,9 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       };
 
       const showIndicator = (targetSlot: number): void => {
-        const layout = panel.layout as AccordionLayout;
+        const layout = accordion.layout as AccordionLayout;
         const titles = Array.from(layout.titles);
-        const panelRect = panel.node.getBoundingClientRect();
+        const panelRect = accordion.node.getBoundingClientRect();
         let top: number;
         if (targetSlot < titles.length) {
           top = titles[targetSlot].getBoundingClientRect().top - panelRect.top;
@@ -358,14 +416,16 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
 
       const endDrag = (clientY?: number): void => {
         indicator.style.display = 'none';
-        panel.node.classList.remove('jp-mod-dragging');
+        accordion.node.classList.remove('jp-mod-dragging');
         if (isDragging && draggedWidget && clientY !== undefined) {
-          const currentIdx = Array.from(panel.widgets).indexOf(draggedWidget);
+          const currentIdx = Array.from(accordion.widgets).indexOf(
+            draggedWidget
+          );
           const targetSlot = getTargetSlot(clientY);
           const insertIdx =
             targetSlot > currentIdx ? targetSlot - 1 : targetSlot;
           if (insertIdx !== currentIdx) {
-            panel.insertWidget(insertIdx, draggedWidget);
+            accordion.insertWidget(insertIdx, draggedWidget);
             void saveState();
           }
         }
@@ -373,7 +433,7 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         isDragging = false;
       };
 
-      panel.node.addEventListener('pointerdown', (event: PointerEvent) => {
+      accordion.node.addEventListener('pointerdown', (event: PointerEvent) => {
         const target = event.target as HTMLElement;
         const titleEl = target.closest(
           '.jp-AccordionPanel-title'
@@ -381,244 +441,362 @@ const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         if (!titleEl || !target.closest('.jp-FileBrowser-dragHandle')) {
           return;
         }
-        const layout = panel.layout as AccordionLayout;
+        const layout = accordion.layout as AccordionLayout;
         const idx = Array.from(layout.titles).indexOf(titleEl);
         if (idx < 0) {
           return;
         }
-        draggedWidget = panel.widgets[idx];
+        draggedWidget = accordion.widgets[idx];
         startY = event.clientY;
-        panel.node.setPointerCapture(event.pointerId);
+        accordion.node.setPointerCapture(event.pointerId);
       });
 
-      panel.node.addEventListener('pointermove', (event: PointerEvent) => {
+      accordion.node.addEventListener('pointermove', (event: PointerEvent) => {
         if (!draggedWidget) {
           return;
         }
         if (!isDragging && Math.abs(event.clientY - startY) > 5) {
           isDragging = true;
-          panel.node.classList.add('jp-mod-dragging');
+          accordion.node.classList.add('jp-mod-dragging');
         }
         if (isDragging) {
           showIndicator(getTargetSlot(event.clientY));
         }
       });
 
-      panel.node.addEventListener('pointerup', (event: PointerEvent) => {
+      accordion.node.addEventListener('pointerup', (event: PointerEvent) => {
         endDrag(event.clientY);
       });
 
-      panel.node.addEventListener('pointercancel', () => {
+      accordion.node.addEventListener('pointercancel', () => {
         endDrag();
       });
     };
 
-    const moveToFileBrowser = (managerName: string) => {
-      const widget = running.removeSection(managerName);
-      if (!widget) {
-        return;
-      }
-      movedSections.add(managerName);
+    // ------------------------------------------------------------------ //
+    // Core move operations                                                 //
+    // ------------------------------------------------------------------ //
 
-      // Remember collapsed state before re-parenting clears it
+    const applyMoveToTarget = (
+      widget: Widget,
+      sourceId: string,
+      sectionId: string,
+      sourceLabel: string,
+      targetId: string,
+      targetPanel: ISectionPanelTarget
+    ): void => {
       const wasHidden = widget.isHidden;
+      targetPanel.addSection(widget);
 
-      fileBrowser.addBottomWidget(widget);
+      widgetToInfo.set(widget, { sourceId, sectionId, sourceLabel, targetId });
 
-      if (!dragSetupDone && fileBrowser.bottomPanel) {
-        setupBottomPanelDrag();
-        dragSetupDone = true;
-      }
-      addDragHandle(widget);
+      const accordion = targetPanel.accordionPanel;
+      if (accordion) {
+        if (!dragSetupDone.has(targetId)) {
+          setupAccordionDrag(accordion, targetId);
+        }
+        addDragHandle(widget, accordion);
 
-      if (wasHidden && fileBrowser.bottomPanel) {
-        const idx = Array.from(fileBrowser.bottomWidgets).indexOf(widget);
+        const idx = Array.from(accordion.widgets).indexOf(widget);
         if (idx >= 0) {
-          const titleEl = fileBrowser.bottomPanel.titles[idx];
-          titleEl.classList.remove('lm-mod-expanded');
-          titleEl.setAttribute('aria-expanded', 'false');
-        }
-      }
+          const hostedTitle = accordion.titles[idx];
+          hostedTitle.classList.add('jp-hosted-section');
+          hostedTitleToWidget.set(hostedTitle, widget);
 
-      // Listen to split panel handle moves for state persistence
-      if (fileBrowser.splitPanel) {
-        fileBrowser.splitPanel.handleMoved.connect(saveState);
-      }
-
-      void saveState();
-    };
-
-    const moveBackToRunning = (managerName: string) => {
-      const widgets = fileBrowser.bottomWidgets;
-      const widget = widgets.find(w => w.title.label === managerName);
-      if (!widget) {
-        return;
-      }
-
-      fileBrowser.removeBottomWidget(widget);
-      running.reinsertSection(widget);
-      movedSections.delete(managerName);
-      void saveState();
-    };
-
-    // Identify right-clicked section in Running Sessions
-    running.node.addEventListener('contextmenu', (event: MouseEvent) => {
-      const titleEl = (event.target as HTMLElement).closest(
-        '.jp-AccordionPanel-title'
-      );
-      if (!titleEl) {
-        lastClickedManagerName = null;
-        return;
-      }
-      const accordion = running.content as AccordionPanel;
-      const layout = accordion.layout as AccordionLayout;
-      const index = Array.from(layout.titles).indexOf(titleEl as HTMLElement);
-      if (index >= 0) {
-        lastClickedManagerName = accordion.widgets[index].title.label;
-      } else {
-        lastClickedManagerName = null;
-      }
-    });
-
-    // Identify right-clicked section in FileBrowser bottom panel
-    fileBrowser.node.addEventListener('contextmenu', (event: MouseEvent) => {
-      const titleEl = (event.target as HTMLElement).closest(
-        '.jp-FileBrowser-bottomPanel .jp-AccordionPanel-title'
-      );
-      if (!titleEl) {
-        lastClickedBottomWidget = null;
-        return;
-      }
-      // Find the AccordionPanel within the bottom panel
-      const bottomPanel = fileBrowser.node.querySelector(
-        '.jp-FileBrowser-bottomPanel'
-      );
-      if (!bottomPanel) {
-        lastClickedBottomWidget = null;
-        return;
-      }
-      // Find all title elements in the bottom panel's accordion
-      const bottomWidgets = fileBrowser.bottomWidgets;
-      // The bottom panel is an AccordionPanel; match by title index
-      const accordion = fileBrowser.bottomPanel;
-      if (!accordion) {
-        lastClickedBottomWidget = null;
-        return;
-      }
-      const accLayout = accordion.layout as AccordionLayout;
-      const idx = Array.from(accLayout.titles).indexOf(titleEl as HTMLElement);
-      if (idx >= 0 && idx < bottomWidgets.length) {
-        const w = bottomWidgets[idx];
-        lastClickedBottomWidget = w instanceof PanelWithToolbar ? w : null;
-      } else {
-        lastClickedBottomWidget = null;
-      }
-    });
-
-    app.commands.addCommand(CommandIDs.moveSectionToFileBrowser, {
-      label: trans.__('Move to File Browser'),
-      describedBy: {
-        args: {
-          type: 'object',
-          properties: {}
-        }
-      },
-      isVisible: () => lastClickedManagerName !== null,
-      execute: () => {
-        if (lastClickedManagerName) {
-          moveToFileBrowser(lastClickedManagerName);
-          lastClickedManagerName = null;
-        }
-      }
-    });
-
-    app.commands.addCommand(CommandIDs.moveSectionBackFromFileBrowser, {
-      label: trans.__('Move back to Running Sessions'),
-      describedBy: {
-        args: {
-          type: 'object',
-          properties: {}
-        }
-      },
-      isVisible: () => lastClickedBottomWidget !== null,
-      execute: (args: ReadonlyPartialJSONObject) => {
-        const managerName =
-          (args?.managerName as string) ?? lastClickedBottomWidget?.title.label;
-        if (managerName) {
-          moveBackToRunning(managerName);
-          lastClickedBottomWidget = null;
-        }
-      }
-    });
-
-    app.contextMenu.addItem({
-      command: CommandIDs.moveSectionToFileBrowser,
-      selector: '#jp-running-sessions .jp-AccordionPanel-title',
-      rank: 10
-    });
-
-    app.contextMenu.addItem({
-      command: CommandIDs.moveSectionBackFromFileBrowser,
-      selector: '.jp-FileBrowser-bottomPanel .jp-AccordionPanel-title',
-      rank: 10
-    });
-
-    // Restore state on startup
-    if (stateDB) {
-      const pendingMoves = new Set<string>();
-
-      void stateDB.fetch(MOVE_STATE_KEY).then(value => {
-        const state = value as IMovedSectionsState | undefined;
-        if (!state?.movedManagerNames?.length) {
-          return;
-        }
-
-        const splitSizes = state.splitSizes;
-
-        // Try to move sections that are already registered
-        for (const name of state.movedManagerNames) {
-          const widget = running.removeSection(name);
-          if (widget) {
-            movedSections.add(name);
-            fileBrowser.addBottomWidget(widget);
-            if (!dragSetupDone && fileBrowser.bottomPanel) {
-              setupBottomPanelDrag();
-              dragSetupDone = true;
-            }
-            addDragHandle(widget);
-          } else {
-            // Manager not yet registered; wait for it
-            pendingMoves.add(name);
+          if (wasHidden) {
+            hostedTitle.classList.remove('lm-mod-expanded');
+            hostedTitle.setAttribute('aria-expanded', 'false');
           }
         }
+      }
 
-        // Restore split sizes after all initial sections are moved
-        if (splitSizes && fileBrowser.splitPanel) {
-          fileBrowser.splitPanel.setRelativeSizes(splitSizes);
-          fileBrowser.splitPanel.handleMoved.connect(saveState);
+      if (widget instanceof PanelWithToolbar) {
+        // Dispose existing button first (handles re-move scenarios)
+        widgetToMoveBackButton.get(widget)?.dispose();
+        const btn = new ToolbarButton({
+          icon: undoIcon,
+          tooltip: trans.__('Move back to %1', sourceLabel),
+          onClick: () => {
+            moveSectionBack(widget);
+          }
+        });
+        widget.toolbar.addItem('move-back', btn);
+        widgetToMoveBackButton.set(widget, btn);
+      }
+
+      const sp = targetPanel.splitPanel;
+      if (sp && !connectedSplitPanels.has(sp)) {
+        sp.handleMoved.connect(saveState);
+        connectedSplitPanels.add(sp);
+      }
+
+      // Apply any pending split sizes for this target
+      const sizes = pendingTargetSizes.get(targetId);
+      if (sizes && targetPanel.splitPanel) {
+        targetPanel.splitPanel.setRelativeSizes(sizes);
+      }
+    };
+
+    /**
+     * Move a section from its source sidebar to a target panel.
+     * Returns true on success, false if the section is not yet available.
+     */
+    const moveSection = (
+      sourceId: string,
+      sectionId: string,
+      targetId: string
+    ): boolean => {
+      const sourceEntry = registry.getSources().get(sourceId);
+      const targetEntry = registry.getTargets().get(targetId);
+      if (!sourceEntry || !targetEntry) {
+        return false;
+      }
+      const widget = sourceEntry.sidebar.removeSection(sectionId);
+      if (!widget) {
+        return false;
+      }
+      applyMoveToTarget(
+        widget,
+        sourceId,
+        sectionId,
+        sourceEntry.label,
+        targetId,
+        targetEntry.panel
+      );
+      void saveState();
+      return true;
+    };
+
+    const moveSectionBack = (widget: Widget): void => {
+      const info = widgetToInfo.get(widget);
+      if (!info) {
+        return;
+      }
+      const sourceEntry = registry.getSources().get(info.sourceId);
+      const targetEntry = registry.getTargets().get(info.targetId);
+      if (!sourceEntry || !targetEntry) {
+        return;
+      }
+
+      targetEntry.panel.removeSection(widget);
+      sourceEntry.sidebar.reinsertSection(widget);
+
+      widgetToInfo.delete(widget);
+
+      widgetToMoveBackButton.get(widget)?.dispose();
+      widgetToMoveBackButton.delete(widget);
+
+      void saveState();
+    };
+
+    // ------------------------------------------------------------------ //
+    // Source / target wiring                                               //
+    // ------------------------------------------------------------------ //
+
+    const setupSource = (
+      sourceId: string,
+      _sourceLabel: string,
+      source: ISidebarWithSections
+    ): void => {
+      for (const section of source.getSections()) {
+        section.titleNode.classList.add('jp-movable-section');
+        titleToSection.set(section.titleNode, {
+          sourceId,
+          sectionId: section.id
+        });
+      }
+
+      source.sectionAdded.connect((_sender, section) => {
+        section.titleNode.classList.add('jp-movable-section');
+        titleToSection.set(section.titleNode, {
+          sourceId,
+          sectionId: section.id
+        });
+
+        // Fulfill any pending state restoration for this section
+        const pending = pendingSections.get(sourceId);
+        if (pending?.has(section.id)) {
+          const targetId = pending.get(section.id)!;
+          pending.delete(section.id);
+          if (pending.size === 0) {
+            pendingSections.delete(sourceId);
+          }
+          moveSection(sourceId, section.id, targetId);
         }
+      });
+    };
 
-        // Watch for late-arriving managers
-        if (pendingMoves.size > 0) {
-          const onManagerAdded = (
-            _sender: unknown,
-            manager: IRunningSessions.IManager
-          ) => {
-            if (pendingMoves.has(manager.name)) {
-              pendingMoves.delete(manager.name);
-              // Delay slightly to let addSection complete
-              setTimeout(() => {
-                moveToFileBrowser(manager.name);
-                if (splitSizes && fileBrowser.splitPanel) {
-                  fileBrowser.splitPanel.setRelativeSizes(splitSizes);
-                }
-              }, 100);
-              if (pendingMoves.size === 0) {
-                managers.added.disconnect(onManagerAdded);
+    const setupTarget = (
+      targetId: string,
+      targetLabel: string,
+      panel: ISectionPanelTarget
+    ): void => {
+      app.contextMenu.addItem({
+        command: CommandIDs.moveSectionTo,
+        args: { targetId, targetLabel },
+        selector: '.jp-movable-section',
+        rank: 10
+      });
+
+      if (panel.accordionPanel && panel.sections.length > 0) {
+        setupAccordionDrag(panel.accordionPanel, targetId);
+      }
+    };
+
+    // ------------------------------------------------------------------ //
+    // Commands                                                             //
+    // ------------------------------------------------------------------ //
+
+    app.commands.addCommand(CommandIDs.moveSectionTo, {
+      label: (args: ReadonlyPartialJSONObject) =>
+        trans.__('Move to %1', (args.targetLabel as string) ?? ''),
+      describedBy: {
+        args: {
+          type: 'object',
+          properties: {
+            targetId: { type: 'string' },
+            targetLabel: { type: 'string' }
+          }
+        }
+      },
+      isVisible: () => {
+        if (!lastContextEl) {
+          return false;
+        }
+        const titleEl = lastContextEl.closest(
+          '.jp-movable-section'
+        ) as HTMLElement | null;
+        return titleEl ? titleToSection.has(titleEl) : false;
+      },
+      execute: (args: ReadonlyPartialJSONObject) => {
+        const targetId = args.targetId as string;
+        if (!targetId || !lastContextEl) {
+          return;
+        }
+        const titleEl = lastContextEl.closest(
+          '.jp-movable-section'
+        ) as HTMLElement | null;
+        if (!titleEl) {
+          return;
+        }
+        const sectionInfo = titleToSection.get(titleEl);
+        if (!sectionInfo) {
+          return;
+        }
+        moveSection(sectionInfo.sourceId, sectionInfo.sectionId, targetId);
+      }
+    });
+
+    app.commands.addCommand(CommandIDs.moveSectionBack, {
+      label: () => {
+        if (!lastContextEl) {
+          return trans.__('Move back');
+        }
+        const titleEl = lastContextEl.closest(
+          '.jp-hosted-section'
+        ) as HTMLElement | null;
+        if (!titleEl) {
+          return trans.__('Move back');
+        }
+        const widget = hostedTitleToWidget.get(titleEl);
+        if (!widget) {
+          return trans.__('Move back');
+        }
+        const info = widgetToInfo.get(widget);
+        return info
+          ? trans.__('Move back to %1', info.sourceLabel)
+          : trans.__('Move back');
+      },
+      describedBy: {
+        args: {
+          type: 'object',
+          properties: {}
+        }
+      },
+      isVisible: () => {
+        if (!lastContextEl) {
+          return false;
+        }
+        const titleEl = lastContextEl.closest(
+          '.jp-hosted-section'
+        ) as HTMLElement | null;
+        return titleEl ? hostedTitleToWidget.has(titleEl) : false;
+      },
+      execute: () => {
+        if (!lastContextEl) {
+          return;
+        }
+        const titleEl = lastContextEl.closest(
+          '.jp-hosted-section'
+        ) as HTMLElement | null;
+        if (!titleEl) {
+          return;
+        }
+        const widget = hostedTitleToWidget.get(titleEl);
+        if (widget) {
+          moveSectionBack(widget);
+        }
+      }
+    });
+
+    app.contextMenu.addItem({
+      command: CommandIDs.moveSectionBack,
+      selector: '.jp-hosted-section',
+      rank: 10
+    });
+
+    // ------------------------------------------------------------------ //
+    // Bootstrap from registry                                              //
+    // ------------------------------------------------------------------ //
+
+    for (const [id, { label, sidebar }] of registry.getSources()) {
+      setupSource(id, label, sidebar);
+    }
+    for (const [id, { label, panel }] of registry.getTargets()) {
+      setupTarget(id, label, panel);
+    }
+
+    registry.sourcePanelRegistered.connect(
+      (_sender, { id, label, sidebar }) => {
+        setupSource(id, label, sidebar);
+      }
+    );
+    registry.targetPanelRegistered.connect((_sender, { id, label, panel }) => {
+      setupTarget(id, label, panel);
+    });
+
+    // ------------------------------------------------------------------ //
+    // State restoration                                                    //
+    // ------------------------------------------------------------------ //
+
+    if (stateDB) {
+      void stateDB.fetch(MOVE_STATE_KEY).then(value => {
+        if (!value) {
+          return;
+        }
+        const state = value as IMoveSectionsState;
+
+        for (const [targetId, targetState] of Object.entries(state)) {
+          for (const { sourceId, sectionId } of targetState.sections) {
+            if (!moveSection(sourceId, sectionId, targetId)) {
+              // Section not yet available — wait for sectionAdded signal
+              if (!pendingSections.has(sourceId)) {
+                pendingSections.set(sourceId, new Map());
               }
+              pendingSections.get(sourceId)!.set(sectionId, targetId);
             }
-          };
-          managers.added.connect(onManagerAdded);
+          }
+
+          if (targetState.panelSizes) {
+            const targetEntry = registry.getTargets().get(targetId);
+            if (targetEntry?.panel.splitPanel) {
+              targetEntry.panel.splitPanel.setRelativeSizes(
+                targetState.panelSizes
+              );
+            }
+            // Also store for when pending sections arrive
+            pendingTargetSizes.set(targetId, targetState.panelSizes);
+          }
         }
       });
     }

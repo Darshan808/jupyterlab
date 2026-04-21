@@ -7,7 +7,12 @@ import type { ISettingRegistry } from '@jupyterlab/settingregistry';
 import { Token } from '@lumino/coreutils';
 import type { IDisposable } from '@lumino/disposable';
 import type { ISignal } from '@lumino/signaling';
-import type { CommandPalette, Widget } from '@lumino/widgets';
+import type {
+  AccordionPanel,
+  CommandPalette,
+  SplitPanel,
+  Widget
+} from '@lumino/widgets';
 import type { ISessionContext } from './sessioncontext';
 import type { Licenses } from './licenses';
 
@@ -421,27 +426,44 @@ export const IToolbarWidgetRegistry = new Token<IToolbarWidgetRegistry>(
 );
 
 /**
+ * A section entry exposed by a source sidebar — its ID and title DOM element.
+ */
+export interface ISectionEntry {
+  readonly id: string;
+  readonly titleNode: HTMLElement;
+}
+
+/**
  * Sidebar panel that exposes moveable sections.
+ * Source panels (e.g. Running Sessions) implement this.
  */
 export interface ISidebarWithSections {
   /**
-   * Remove a section by its ID and return the widget.
-   *
-   * @param sectionId - The identifier of the section to remove.
-   * @returns The removed section widget, or null if not found.
+   * Fired when a new section becomes available in this sidebar.
+   * The generic move plugin uses this to attach context-menu CSS and to
+   * restore state for sections that arrive after the plugin activates.
+   */
+  readonly sectionAdded: ISignal<this, ISectionEntry>;
+
+  /**
+   * Return the currently-available sections with their title DOM nodes.
+   */
+  getSections(): ReadonlyArray<ISectionEntry>;
+
+  /**
+   * Remove a section by its ID and return the widget, or null if not found.
    */
   removeSection(sectionId: string): Widget | null;
 
   /**
    * Re-insert a previously removed section back into this sidebar.
-   *
-   * @param widget - The section widget to re-insert.
    */
   reinsertSection(widget: Widget): void;
 }
 
 /**
  * Panel that can receive sections from other sidebars.
+ * Target panels (e.g. File Browser) implement this.
  */
 export interface ISectionPanelTarget {
   /**
@@ -458,18 +480,27 @@ export interface ISectionPanelTarget {
    * The sections currently hosted in this panel.
    */
   readonly sections: ReadonlyArray<Widget>;
+
+  /**
+   * The underlying AccordionPanel, or null if not yet created.
+   * Used for drag-to-reorder and for accessing hosted section title elements.
+   */
+  readonly accordionPanel: AccordionPanel | null;
+
+  /**
+   * The SplitPanel wrapping this panel's content and accordion, or null.
+   * Used to persist and restore panel size ratios.
+   */
+  readonly splitPanel: SplitPanel | null;
 }
 
 /**
- * Registry where source and target panels register themselves
+ * Registry where source and target panels register themselves,
+ * enabling generic section-moving commands without hard-coded coupling.
  */
 export interface IMovableSectionRegistry {
   /**
    * Register a sidebar as a source of moveable sections.
-   *
-   * @param id - A unique identifier for the source.
-   * @param label - A human-readable label shown in menus.
-   * @param sidebar - The sidebar implementing ISidebarWithSections.
    */
   registerSource(
     id: string,
@@ -479,10 +510,6 @@ export interface IMovableSectionRegistry {
 
   /**
    * Register a panel as a target that can receive sections.
-   *
-   * @param id - A unique identifier for the target.
-   * @param label - A human-readable label shown in menus.
-   * @param panel - The panel implementing ISectionPanelTarget.
    */
   registerTarget(id: string, label: string, panel: ISectionPanelTarget): void;
 
@@ -500,6 +527,22 @@ export interface IMovableSectionRegistry {
   getTargets(): ReadonlyMap<
     string,
     { label: string; panel: ISectionPanelTarget }
+  >;
+
+  /**
+   * Fired when a source sidebar is registered.
+   */
+  readonly sourcePanelRegistered: ISignal<
+    IMovableSectionRegistry,
+    { id: string; label: string; sidebar: ISidebarWithSections }
+  >;
+
+  /**
+   * Fired when a target panel is registered.
+   */
+  readonly targetPanelRegistered: ISignal<
+    IMovableSectionRegistry,
+    { id: string; label: string; panel: ISectionPanelTarget }
   >;
 }
 
