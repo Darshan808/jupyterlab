@@ -66,6 +66,7 @@ import { IMetadataFormProvider } from '@jupyterlab/metadataform';
 import type * as nbformat from '@jupyterlab/nbformat';
 import type { Notebook } from '@jupyterlab/notebook';
 import {
+  CellCounterStatus,
   CommandEditStatus,
   ExecutionIndicator,
   INotebookCellExecutor,
@@ -312,6 +313,8 @@ namespace CommandIDs {
 
   export const disableOutputScrolling = 'notebook:disable-output-scrolling';
 
+  export const toggleOutputScrolling = 'notebook:toggle-output-scrolling';
+
   export const selectLastRunCell = 'notebook:select-last-run-cell';
 
   export const replaceSelection = 'notebook:replace-selection';
@@ -456,6 +459,50 @@ export const commandEditItem: JupyterFrontEndPlugin<void> = {
       item,
       align: 'right',
       rank: 4,
+      isActive: () =>
+        !!shell.currentWidget &&
+        !!tracker.currentWidget &&
+        shell.currentWidget === tracker.currentWidget
+    });
+  }
+};
+
+/**
+ * A plugin providing a current cell/total cells status item.
+ */
+export const cellCounterItem: JupyterFrontEndPlugin<void> = {
+  id: '@jupyterlab/notebook-extension:cell-counter-status',
+  description: 'Adds a notebook cell counter status widget.',
+  autoStart: true,
+  requires: [INotebookTracker, ITranslator],
+  optional: [IStatusBar],
+  activate: (
+    app: JupyterFrontEnd,
+    tracker: INotebookTracker,
+    translator: ITranslator,
+    statusBar: IStatusBar | null
+  ) => {
+    if (!statusBar) {
+      // Automatically disable if statusbar missing
+      return;
+    }
+
+    const { shell } = app;
+    const item = new CellCounterStatus({ translator });
+
+    const updateNotebook = () => {
+      const current = tracker.currentWidget;
+      item.model.notebook = current && current.content;
+    };
+
+    tracker.currentChanged.connect(updateNotebook);
+    updateNotebook();
+
+    statusBar.registerStatusItem(cellCounterItem.id, {
+      priority: 1,
+      item,
+      align: 'right',
+      rank: 2.5,
       isActive: () =>
         !!shell.currentWidget &&
         !!tracker.currentWidget &&
@@ -1203,6 +1250,7 @@ const plugins: JupyterFrontEndPlugin<any>[] = [
   executionIndicator,
   exportPlugin,
   tools,
+  cellCounterItem,
   commandEditItem,
   notebookTrustItem,
   widgetFactoryPlugin,
@@ -2424,6 +2472,25 @@ function getCurrent(
   }
 
   return widget;
+}
+
+// Whether all selected code cells have output scrolling enabled.
+function isOutputScrollingEnabled(notebook: Notebook): boolean {
+  if (!notebook.model || !notebook.activeCell) {
+    return false;
+  }
+
+  let hasCodeCell = false;
+  for (const cell of notebook.widgets) {
+    if (notebook.isSelectedOrActive(cell) && cell.model.type === 'code') {
+      hasCodeCell = true;
+      if (!(cell as CodeCell).outputsScrolled) {
+        return false;
+      }
+    }
+  }
+
+  return hasCodeCell;
 }
 
 /**
@@ -4406,6 +4473,43 @@ function addCommands(
       args: {
         type: 'object',
         properties: {}
+      }
+    }
+  });
+  commands.addCommand(CommandIDs.toggleOutputScrolling, {
+    label: args =>
+      args['isMenu'] || args['isPalette']
+        ? trans.__('Enable Scrolling for Outputs')
+        : trans.__('Toggle Scrolling for Outputs'),
+    execute: args => {
+      const current = getCurrent(tracker, shell, args);
+
+      if (current) {
+        if (isOutputScrollingEnabled(current.content)) {
+          return NotebookActions.disableOutputScrolling(current.content);
+        }
+
+        return NotebookActions.enableOutputScrolling(current.content);
+      }
+    },
+    isEnabled,
+    isToggled: args => {
+      const current = getCurrent(tracker, shell, { ...args, activate: false });
+      if (current) {
+        return isOutputScrollingEnabled(current.content);
+      } else {
+        return false;
+      }
+    },
+    describedBy: {
+      args: {
+        type: 'object',
+        properties: {
+          isMenu: {
+            type: 'boolean',
+            description: trans.__('Whether the command is called from a menu')
+          }
+        }
       }
     }
   });
