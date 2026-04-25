@@ -27,10 +27,15 @@ const MOVE_STATE_KEY = 'section-mover:layout';
 
 /**
  * Shape of the persisted state.
- * Keyed by target panel ID, value is the ordered list of sections hosted there.
+ * Keyed by target panel ID; each entry records ordered sections and whether
+ * each was collapsed when the state was saved.
  */
 interface IMoveSectionsState {
-  [targetId: string]: Array<{ sourceId: string; sectionId: string }>;
+  [targetId: string]: Array<{
+    sourceId: string;
+    sectionId: string;
+    collapsed?: true;
+  }>;
 }
 
 namespace CommandIDs {
@@ -41,8 +46,7 @@ namespace CommandIDs {
 /**
  * Generic plugin that moves sections between any registered source sidebar
  * and target panel. Sources and targets announce themselves via
- * IMovableSectionRegistry; this plugin discovers them through signals so no
- * code changes are needed when new participants register.
+ * IMovableSectionRegistry.
  */
 export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
   id: '@jupyterlab/apputils-extension:move-sections',
@@ -65,7 +69,7 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
 
     // section title element (in source sidebar) → section identity
     const titleToSection = new WeakMap<
-      HTMLElement, // panel's title node
+      HTMLElement,
       { sourceId: string; sectionId: string }
     >();
 
@@ -86,8 +90,11 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
     // targets that already have drag-reorder set up
     const dragSetupDone = new Set<string>();
 
-    // pending restorations: sourceId → Map<sectionId, targetId>
-    const pendingSections = new Map<string, Map<string, string>>();
+    // pending restorations: sourceId → Map<sectionId, { targetId, collapsed }>
+    const pendingSections = new Map<
+      string,
+      Map<string, { targetId: string; collapsed: boolean }>
+    >();
 
     // Capture last right-clicked element before the context menu opens
     let lastContextEl: HTMLElement | null = null;
@@ -110,15 +117,20 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       const state: IMoveSectionsState = {};
       for (const [targetId, { panel }] of registry.getTargets()) {
         const sections = panel.sections
-          .map(w => widgetToInfo.get(w))
-          .filter(
-            (info): info is NonNullable<typeof info> =>
-              !!info && info.targetId === targetId
-          )
-          .map(info => ({
-            sourceId: info.sourceId,
-            sectionId: info.sectionId
-          }));
+          .map(w => {
+            const info = widgetToInfo.get(w);
+            if (!info || info.targetId !== targetId) {
+              return null;
+            }
+            // Detect collapsed state: widget content is hidden when collapsed
+            const isCollapsed = w.isHidden;
+            return {
+              sourceId: info.sourceId,
+              sectionId: info.sectionId,
+              ...(isCollapsed ? { collapsed: true as const } : {})
+            };
+          })
+          .filter((e): e is NonNullable<typeof e> => e !== null);
         if (sections.length > 0) {
           state[targetId] = sections;
         }
@@ -139,9 +151,9 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         return;
       }
       const titleEl = accordion.titles[idx];
-      if (!titleEl.querySelector('.jp-FileBrowser-dragHandle')) {
+      if (!titleEl.querySelector('.jp-movable-section-dragHandle')) {
         const handle = document.createElement('span');
-        handle.className = 'jp-FileBrowser-dragHandle';
+        handle.className = 'jp-movable-section-dragHandle';
         titleEl.prepend(handle);
       }
     };
@@ -155,13 +167,15 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       }
       dragSetupDone.add(targetId);
 
+      // Persist collapse/expand state whenever the user toggles a section.
+      accordion.expansionToggled.connect(() => void saveState());
+
       let draggedWidget: Widget | null = null;
       let startY = 0;
       let isDragging = false;
 
-      // Blue line that appears on drag and drops to indicate the potential drop position
       const indicator = document.createElement('div');
-      indicator.className = 'jp-FileBrowser-dropIndicator';
+      indicator.className = 'jp-movable-section-dropIndicator';
       indicator.style.display = 'none';
       accordion.node.appendChild(indicator);
 
@@ -216,8 +230,7 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         const titleEl = target.closest(
           '.jp-AccordionPanel-title'
         ) as HTMLElement | null;
-        // Only start drag if pointerdown happened on a title's drag handle
-        if (!titleEl || !target.closest('.jp-FileBrowser-dragHandle')) {
+        if (!titleEl || !target.closest('.jp-movable-section-dragHandle')) {
           return;
         }
         const layout = accordion.layout as AccordionLayout;
@@ -262,8 +275,10 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       sectionId: string,
       sourceLabel: string,
       targetId: string,
-      targetPanel: ISectionPanelTarget
+      targetPanel: ISectionPanelTarget,
+      collapsed = false
     ): void => {
+      // Capture hidden state before reparenting
       const wasHidden = widget.isHidden;
       targetPanel.addSection(widget);
 
@@ -276,13 +291,16 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         }
         addDragHandle(widget, accordion);
 
-        const idx = accordion.widgets.indexOf(widget);
+        const idx = Array.from(accordion.widgets).indexOf(widget);
         if (idx >= 0) {
           const hostedTitle = accordion.titles[idx];
           hostedTitle.classList.add('jp-hosted-section');
           hostedTitleToWidget.set(hostedTitle, widget);
 
-          if (wasHidden) {
+          if (wasHidden || collapsed) {
+            // Ensure the content widget is actually hidden (needed when
+            // restoring state where the widget was expanded in the source).
+            widget.hide();
             hostedTitle.classList.remove('lm-mod-expanded');
             hostedTitle.setAttribute('aria-expanded', 'false');
             // accordion.collapse(idx);
@@ -298,7 +316,8 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
     const moveSection = (
       sourceId: string,
       sectionId: string,
-      targetId: string
+      targetId: string,
+      collapsed = false
     ): boolean => {
       const sourceEntry = registry.getSources().get(sourceId);
       const targetEntry = registry.getTargets().get(targetId);
@@ -315,7 +334,8 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         sectionId,
         sourceEntry.label,
         targetId,
-        targetEntry.panel
+        targetEntry.panel,
+        collapsed
       );
       void saveState();
       return true;
@@ -331,14 +351,13 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       if (!sourceEntry || !targetEntry) {
         return;
       }
-
-      const wasHidden = widget.isHidden;
-
+      const isHidden = widget.isHidden;
       targetEntry.panel.removeSectionWidget(widget);
       sourceEntry.sidebar.reinsertSection(widget);
       widgetToInfo.delete(widget);
 
-      // After reinsertion the accordion assigns a fresh title element. Re-register it.
+      // After reinsertion the accordion assigns a fresh title element.
+      // Re-register it so the context menu works on this section again.
       const restored = sourceEntry.sidebar
         .getSections()
         .find(s => s.id === info.sectionId);
@@ -348,24 +367,16 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
           sourceId: info.sourceId,
           sectionId: info.sectionId
         });
-        if (wasHidden) {
+        if (isHidden) {
+          restored.widget.hide();
           restored.titleNode.classList.remove('lm-mod-expanded');
           restored.titleNode.setAttribute('aria-expanded', 'false');
+          // sourceEntry.sidebar.accordionPanel?.collapse(
+          //  sourceEntry.sidebar.accordionPanel?.widgets.indexOf(restored.widget)
+          //   )
+          // );
         }
       }
-      // widget.parent?.node.classList.add('jp-movable-section');
-      // titleToSection.set(widget.parent?.node as HTMLElement, {
-      //   sourceId: info.sourceId,
-      //   sectionId: info.sectionId
-      // });
-      // if (wasHidden) {
-      //   // const index = sourceEntry.sidebar.accordionPanel?.widgets.indexOf(widget);
-      //   // if (index !== undefined && index >= 0) {
-      //   //   sourceEntry.sidebar.accordionPanel?.collapse(index!);
-      //   // }
-      //   widget.parent?.node.classList.remove('lm-mod-expanded');
-      //   widget.parent?.node.setAttribute('aria-expanded', 'false');
-      // }
 
       void saveState();
     };
@@ -396,12 +407,12 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         // Fulfill any pending state restoration for this section
         const pending = pendingSections.get(sourceId);
         if (pending?.has(section.id)) {
-          const targetId = pending.get(section.id)!;
+          const { targetId, collapsed } = pending.get(section.id)!;
           pending.delete(section.id);
           if (pending.size === 0) {
             pendingSections.delete(sourceId);
           }
-          moveSection(sourceId, section.id, targetId);
+          moveSection(sourceId, section.id, targetId, collapsed);
         }
       });
     };
@@ -411,7 +422,6 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
       targetLabel: string,
       panel: ISectionPanelTarget
     ): void => {
-      // These appear only in source panel sections.
       app.contextMenu.addItem({
         command: CommandIDs.moveSectionTo,
         args: { targetId, targetLabel },
@@ -440,14 +450,33 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
           }
         }
       },
-      isVisible: () => {
+      isVisible: (args: ReadonlyPartialJSONObject) => {
         if (!lastContextEl) {
           return false;
         }
         const titleEl = lastContextEl.closest(
           '.jp-movable-section'
         ) as HTMLElement | null;
-        return titleEl ? titleToSection.has(titleEl) : false;
+        if (!titleEl) {
+          return false;
+        }
+        const sectionInfo = titleToSection.get(titleEl);
+        if (!sectionInfo) {
+          return false;
+        }
+        const targetId = args.targetId as string;
+        if (!targetId) {
+          return false;
+        }
+        // Don't offer to move a section to the same panel it originates from
+        const sourceEntry = registry.getSources().get(sectionInfo.sourceId);
+        const targetEntry = registry.getTargets().get(targetId);
+        if (!sourceEntry || !targetEntry) {
+          return false;
+        }
+        return (
+          (sourceEntry.sidebar as unknown) !== (targetEntry.panel as unknown)
+        );
       },
       execute: (args: ReadonlyPartialJSONObject) => {
         const targetId = args.targetId as string;
@@ -556,13 +585,17 @@ export const moveSectionsPlugin: JupyterFrontEndPlugin<void> = {
         const state = value as IMoveSectionsState;
 
         for (const [targetId, sections] of Object.entries(state)) {
-          for (const { sourceId, sectionId } of sections) {
-            if (!moveSection(sourceId, sectionId, targetId)) {
+          for (const { sourceId, sectionId, collapsed } of sections) {
+            if (
+              !moveSection(sourceId, sectionId, targetId, collapsed ?? false)
+            ) {
               // Section not yet available — wait for sectionAdded signal
               if (!pendingSections.has(sourceId)) {
                 pendingSections.set(sourceId, new Map());
               }
-              pendingSections.get(sourceId)!.set(sectionId, targetId);
+              pendingSections
+                .get(sourceId)!
+                .set(sectionId, { targetId, collapsed: collapsed ?? false });
             }
           }
         }

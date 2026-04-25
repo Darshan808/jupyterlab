@@ -467,7 +467,7 @@
   position: relative;
 }
 
-.jp-FileBrowser-dragHandle {
+.jp-movable-section-dragHandle {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
@@ -476,18 +476,18 @@
   cursor: grab;
 }
 
-.jp-FileBrowser-dragHandle::before {
+.jp-movable-section-dragHandle::before {
   content: '⠿';
   font-size: 12px;
   line-height: 1;
   color: var(--jp-ui-font-color1);
 }
 
-.jp-FileBrowser-bottomPanel.jp-mod-dragging .jp-FileBrowser-dragHandle {
+.jp-mod-dragging .jp-movable-section-dragHandle {
   cursor: grabbing;
 }
 
-.jp-FileBrowser-dropIndicator {
+.jp-movable-section-dropIndicator {
   position: absolute;
   left: 0;
   right: 0;
