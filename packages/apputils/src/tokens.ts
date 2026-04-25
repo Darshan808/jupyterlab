@@ -7,12 +7,7 @@ import type { ISettingRegistry } from '@jupyterlab/settingregistry';
 import { Token } from '@lumino/coreutils';
 import type { IDisposable } from '@lumino/disposable';
 import type { ISignal } from '@lumino/signaling';
-import type {
-  AccordionPanel,
-  CommandPalette,
-  SplitPanel,
-  Widget
-} from '@lumino/widgets';
+import type { AccordionPanel, CommandPalette, Widget } from '@lumino/widgets';
 import type { ISessionContext } from './sessioncontext';
 import type { Licenses } from './licenses';
 
@@ -431,6 +426,7 @@ export const IToolbarWidgetRegistry = new Token<IToolbarWidgetRegistry>(
 export interface ISectionEntry {
   readonly id: string;
   readonly titleNode: HTMLElement;
+  readonly widget: Widget;
 }
 
 /**
@@ -439,13 +435,6 @@ export interface ISectionEntry {
  */
 export interface ISidebarWithSections {
   /**
-   * Fired when a new section becomes available in this sidebar.
-   * The generic move plugin uses this to attach context-menu CSS and to
-   * restore state for sections that arrive after the plugin activates.
-   */
-  readonly sectionAdded: ISignal<this, ISectionEntry>;
-
-  /**
    * Return the currently-available sections with their title DOM nodes.
    */
   getSections(): ReadonlyArray<ISectionEntry>;
@@ -453,12 +442,25 @@ export interface ISidebarWithSections {
   /**
    * Remove a section by its ID and return the widget, or null if not found.
    */
-  removeSection(sectionId: string): Widget | null;
+  removeSectionById(sectionId: string): Widget | null;
 
   /**
    * Re-insert a previously removed section back into this sidebar.
    */
   reinsertSection(widget: Widget): void;
+
+  /**
+   * The underlying AccordionPanel, or null if not yet created.
+   * Used to collapse the section
+   */
+  readonly accordionPanel: AccordionPanel | null;
+
+  /**
+   * Fired when a new section becomes available in this sidebar.
+   * The generic move plugin uses this to attach context-menu CSS and to
+   * restore state for sections that arrive after the plugin activates.
+   */
+  readonly sectionAdded: ISignal<this, ISectionEntry>;
 }
 
 /**
@@ -474,7 +476,7 @@ export interface ISectionPanelTarget {
   /**
    * Remove a section widget from this panel.
    */
-  removeSection(widget: Widget): void;
+  removeSectionWidget(widget: Widget): void;
 
   /**
    * The sections currently hosted in this panel.
@@ -486,12 +488,6 @@ export interface ISectionPanelTarget {
    * Used for drag-to-reorder and for accessing hosted section title elements.
    */
   readonly accordionPanel: AccordionPanel | null;
-
-  /**
-   * The SplitPanel wrapping this panel's content and accordion, or null.
-   * Used to persist and restore panel size ratios.
-   */
-  readonly splitPanel: SplitPanel | null;
 }
 
 /**

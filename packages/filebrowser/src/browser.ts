@@ -392,6 +392,13 @@ export class FileBrowser extends SidePanel implements ISectionPanelTarget {
   }
 
   /**
+   * A signal emitted when a section is added to or removed from the bottom panel.
+   */
+  get sectionChanged(): ISignal<this, void> {
+    return this._sectionChanged;
+  }
+
+  /**
    * Select an item by name.
    *
    * @param name - The name of the item to select.
@@ -671,10 +678,12 @@ export class FileBrowser extends SidePanel implements ISectionPanelTarget {
 
   addSection(widget: Widget): void {
     this.addBottomWidget(widget);
+    this._sectionChanged.emit();
   }
 
-  removeSection(widget: Widget): void {
+  removeSectionWidget(widget: Widget): void {
     this.removeBottomWidget(widget);
+    this._sectionChanged.emit();
   }
 
   get sections(): ReadonlyArray<Widget> {
@@ -737,6 +746,7 @@ export class FileBrowser extends SidePanel implements ISectionPanelTarget {
   private _sortFileNamesNaturally: boolean = true;
   private _allowFileUploads: boolean = true;
   private _selectionChanged = new Signal<this, void>(this);
+  private _sectionChanged = new Signal<this, void>(this);
   private _splitPanel: SplitPanel | null = null;
   private _bottomPanel: AccordionPanel | null = null;
 }

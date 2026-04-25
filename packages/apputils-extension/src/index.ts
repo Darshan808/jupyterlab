@@ -52,6 +52,7 @@ import type { IRenderMime } from '@jupyterlab/rendermime-interfaces';
 import { displayShortcuts } from './shortcuts';
 import type { Kernel } from '@jupyterlab/services';
 import { IKernelManager } from '@jupyterlab/services';
+import { moveSectionsPlugin } from './movesectionsplugin';
 
 /**
  * The interval in milliseconds before recover options appear during splash.
@@ -939,6 +940,7 @@ const plugins: JupyterFrontEndPlugin<any>[] = [
   movableSectionRegistry,
   toolbarRegistry,
   utilityCommands,
-  workspacesPlugin
+  workspacesPlugin,
+  moveSectionsPlugin
 ];
 export default plugins;

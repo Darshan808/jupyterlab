@@ -813,6 +813,9 @@ export class RunningSessions
     managers.items().forEach(manager => this.addSection(managers, manager));
     managers.added.connect(this.addSection, this);
   }
+  get accordionPanel(): AccordionPanel {
+    return this.content as AccordionPanel;
+  }
 
   /**
    * Dispose the resources held by the widget
@@ -833,7 +836,7 @@ export class RunningSessions
    * @param managerName - The name of the manager whose section to remove.
    * @returns The removed section widget, or null if not found.
    */
-  removeSection(managerName: string): Widget | null {
+  removeSectionById(managerName: string): Widget | null {
     const widget = this._sectionMap.get(managerName) ?? null;
     if (widget) {
       widget.parent = null;
@@ -882,7 +885,8 @@ export class RunningSessions
     if (idx >= 0) {
       this._sectionAdded.emit({
         id: manager.name,
-        titleNode: panel.titles[idx]
+        titleNode: panel.titles[idx],
+        widget: section
       });
     }
   }
@@ -936,7 +940,7 @@ export class RunningSessions
     for (const [id, widget] of this._sectionMap) {
       const idx = Array.from(panel.widgets).indexOf(widget);
       if (idx >= 0 && panel.titles[idx]) {
-        result.push({ id, titleNode: panel.titles[idx] });
+        result.push({ id, titleNode: panel.titles[idx], widget: widget });
       }
     }
     return result;

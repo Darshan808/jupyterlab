@@ -72,6 +72,7 @@ import {
 } from '@jupyterlab/ui-components';
 import { map } from '@lumino/algorithm';
 import { CommandRegistry } from '@lumino/commands';
+import type { ReadonlyPartialJSONValue } from '@lumino/coreutils';
 import type { ContextMenu } from '@lumino/widgets';
 
 /**
@@ -373,7 +374,8 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
     ILabShell,
     ITranslator,
     IDefaultFileBrowserRenderer,
-    IMovableSectionRegistry
+    IMovableSectionRegistry,
+    IStateDB
   ],
   activate: async (
     app: JupyterFrontEnd,
@@ -383,7 +385,8 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
     labShell: ILabShell | null,
     translator: ITranslator | null,
     renderer: IDefaultFileBrowserRenderer | null,
-    registry: IMovableSectionRegistry | null
+    registry: IMovableSectionRegistry | null,
+    stateDB: IStateDB | null
   ): Promise<IDefaultFileBrowser> => {
     const { commands } = app;
     const trans = (translator ?? nullTranslator).load('jupyterlab');
@@ -426,6 +429,36 @@ const defaultFileBrowser: JupyterFrontEndPlugin<IDefaultFileBrowser> = {
         trans.__('File Browser'),
         defaultBrowser
       );
+    }
+
+    // Persist and restore the split panel divider position independently of
+    // the generic move plugin. The split panel is created lazily on first
+    // section add, so we wire it up via sectionChanged.
+    if (stateDB) {
+      const SPLIT_KEY = 'filebrowser:section-split-sizes';
+      let splitConnected = false;
+
+      const saveSplitSizes = async () => {
+        if (defaultBrowser.splitPanel) {
+          await stateDB.save(
+            SPLIT_KEY,
+            defaultBrowser.splitPanel.relativeSizes() as unknown as ReadonlyPartialJSONValue
+          );
+        }
+      };
+
+      defaultBrowser.sectionChanged.connect(() => {
+        if (!splitConnected && defaultBrowser.splitPanel) {
+          splitConnected = true;
+          defaultBrowser.splitPanel.handleMoved.connect(saveSplitSizes);
+          void stateDB.fetch(SPLIT_KEY).then(value => {
+            if (value && defaultBrowser.splitPanel) {
+              defaultBrowser.splitPanel.setRelativeSizes(value as number[]);
+            }
+          });
+        }
+        void saveSplitSizes();
+      });
     }
 
     void Private.restoreBrowser(
