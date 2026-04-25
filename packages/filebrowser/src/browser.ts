@@ -219,6 +219,13 @@ export class FileBrowser extends SidePanel implements ISectionPanelTarget {
   }
 
   /**
+   * Enter breadcrumb edit mode, showing the path input.
+   */
+  editPath(): void {
+    this.crumbs.enterEditMode();
+  }
+
+  /**
    * Whether to show the date created column
    */
   get showDateCreatedColumn(): boolean {
