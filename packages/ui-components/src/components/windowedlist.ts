@@ -31,6 +31,15 @@ import { PanelLayout, Widget } from '@lumino/widgets';
  */
 const MAXIMUM_TIME_REMAINING = 3000;
 
+/**
+ * Number of consecutive animation frames during which a programmatic scroll to
+ * an item must remain at the same offset before it is considered settled.
+ *
+ * Used in non-windowed modes (`defer`, `contentVisibility`) where the target's
+ * position can keep shifting while surrounding cells finalize their height.
+ */
+const SCROLL_STABLE_FRAMES = 3;
+
 /*
  * Feature detection
  *
@@ -1117,36 +1126,10 @@ export class WindowedList<
     this._resetScrollToItem();
 
     if (!this.viewModel.windowingActive) {
-      // The requested item may not be attached to the DOM yet.
-      // Wait for it to be inserted before computing its position.
-      void this._waitForItem(index).then(item => {
-        // A newer scroll request may have superseded this one while waiting.
-        if (this._isScrolling !== deletage) {
-          return;
-        }
-        if (!item) {
-          // Note: this can happen if the item never gets rendered.
-          console.debug(`Element with index ${index} not found`);
-          this._markProgrammaticScrollingDone();
-          return;
-        }
-        this.scrollTo(
-          this.viewModel.getOffsetForIndexAndAlignment(
-            Math.max(0, Math.min(index, this.viewModel.widgetCount - 1)),
-            align,
-            margin,
-            {
-              totalSize: this._outerElement.scrollHeight,
-              itemMetadata: {
-                offset: item.offsetTop,
-                size: item.clientHeight
-              },
-              currentOffset: this._outerElement.scrollTop
-            },
-            alignPreference
-          )
-        );
-      });
+      // The requested item may not be attached to the DOM yet, and even once
+      // attached its position can keep shifting while surrounding cells render.
+      // Wait for it and re-apply the scroll until it settles.
+      void this._scrollToItemNonWindowed(index, align, margin, alignPreference);
 
       return deletage.promise;
     }
@@ -1161,6 +1144,101 @@ export class WindowedList<
     );
 
     return deletage.promise;
+  }
+
+  /**
+   * Scroll to an item in non-windowed mode (`defer`, `contentVisibility` and
+   * `none`).
+   *
+   * In these modes cells are rendered progressively during idle time, so the
+   * target may not be attached to the DOM yet; and even once attached its
+   * position can keep shifting while surrounding cells finalize their height.
+   * We therefore wait for the element, scroll to it, and then re-apply the
+   * scroll over a few animation frames until the offset stabilizes. Otherwise
+   * the target can be left out of view (notably in Firefox, which does not
+   * anchor the programmatic scroll the way Chromium does).
+   *
+   * @param index Item index to scroll to
+   * @param align Type of alignment
+   * @param margin In 'smart' mode the viewport proportion to add
+   * @param alignPreference Preferred alignment for the `auto` heuristic
+   */
+  private async _scrollToItemNonWindowed(
+    index: number,
+    align: WindowedList.ScrollToAlign,
+    margin: number,
+    alignPreference?: WindowedList.BaseScrollToAlignment
+  ): Promise<void> {
+    const selector = `[data-windowed-list-index="${index}"]`;
+    const item = await this._waitForItem(index);
+
+    // Bail if a newer scroll request superseded this one while waiting.
+    if (
+      this._scrollToItem?.[0] !== index ||
+      this._scrollToItem?.[1] !== align
+    ) {
+      return;
+    }
+    if (!item) {
+      // Note: this can happen if the item never gets rendered.
+      console.debug(`Element with index ${index} not found`);
+      this._markProgrammaticScrollingDone();
+      return;
+    }
+
+    const clampedIndex = Math.max(
+      0,
+      Math.min(index, this.viewModel.widgetCount - 1)
+    );
+    const applyScroll = (target: HTMLElement): number => {
+      const offset = this.viewModel.getOffsetForIndexAndAlignment(
+        clampedIndex,
+        align,
+        margin,
+        {
+          totalSize: this._outerElement.scrollHeight,
+          itemMetadata: {
+            offset: target.offsetTop,
+            size: target.clientHeight
+          },
+          currentOffset: this._outerElement.scrollTop
+        },
+        alignPreference
+      );
+      this._renderScrollbar();
+      this._outerElement.scrollTo({ top: Math.max(0, offset) });
+      return offset;
+    };
+
+    // Initial scroll; resolve the scrolling promise as soon as we have moved
+    // (mirrors the previous one-shot behavior for callers awaiting the result).
+    let previousOffset = applyScroll(item);
+    this._markProgrammaticScrollingDone();
+
+    // Keep correcting while the target keeps moving due to progressive idle
+    // rendering of the surrounding cells. The `_resetScrollToItem` timeout
+    // clears `_scrollToItem` once activity settles, which also ends this loop.
+    let stableFrames = 0;
+    while (
+      this._scrollToItem?.[0] === index &&
+      this._scrollToItem?.[1] === align &&
+      stableFrames < SCROLL_STABLE_FRAMES
+    ) {
+      await new Promise<void>(resolve => {
+        requestAnimationFrame(() => resolve());
+      });
+      const target = this._innerElement.querySelector(selector);
+      if (!(target instanceof HTMLElement)) {
+        break;
+      }
+      const offset = applyScroll(target);
+      if (Math.abs(offset - previousOffset) < 1) {
+        stableFrames++;
+      } else {
+        stableFrames = 0;
+      }
+      previousOffset = offset;
+    }
   }
 
   /**
